@@ -83,6 +83,12 @@ class DoctorTests(unittest.TestCase):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_generated_runner_preserves_configured_tool_path(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"PATH": "/custom/ffmpeg-full/bin"}):
+            install_schedule.generate(Path(tmp)/"schedule")
+            config=json.loads((Path(tmp)/"schedule"/"config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["environment"]["PATH"], "/custom/ffmpeg-full/bin")
+
     def test_generated_runner_executes_with_space_ampersand_and_cjk_paths(self):
         with tempfile.TemporaryDirectory(prefix="pqc runner 測試 & ") as tmp:
             base = Path(tmp)

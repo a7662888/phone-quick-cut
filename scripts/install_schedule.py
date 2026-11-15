@@ -109,6 +109,8 @@ def generate(output, agent="codex", repository=ROOT, python=None):
     output.mkdir(parents=True, exist_ok=True)
     # Capture path/provider preferences, never API credentials or secrets.
     env = {k: v for k, v in os.environ.items() if k.startswith("PQC_") and not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET", "PASSWORD"))}
+    # Cron/Task Scheduler do not inherit an interactive shell's Homebrew/CLI PATH.
+    env["PATH"] = os.environ.get("PATH", os.defpath)
     env.update(PQC_INBOX=str(INBOX.resolve()), PQC_OUTBOX=str(OUTBOX.resolve()), PQC_VIDEO=str(VIDEO_ROOT.resolve()))
     config = {"managed_by": MARKER, "repository": str(repository), "python": python, "agent": agent, "environment": env}
     (output / "config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
