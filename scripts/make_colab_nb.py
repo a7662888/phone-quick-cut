@@ -84,7 +84,7 @@ try:
             with f.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""): digest.update(chunk)
             manifest[f.name] = digest.hexdigest()
-            shutil.copy(f, inbox / f.name)
+            shutil.copy2(f, inbox / f.name)
     if not manifest: raise ValueError("素材夾沒有可用的照片或影片")
     log(f"素材 {len(list(inbox.iterdir()))} 個")
     out = sh("intake.py", "--src", str(inbox))

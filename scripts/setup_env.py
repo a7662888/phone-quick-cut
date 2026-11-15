@@ -28,7 +28,7 @@ def invoke(command, timeout=30, **kwargs):
 
 def install_ffmpeg_hint():
     return {"Windows": "winget install -e --id Gyan.FFmpeg (then reopen the terminal)",
-            "Darwin": "brew install ffmpeg"}.get(platform.system(), "sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk")
+            "Darwin": 'brew install ffmpeg-full\nexport PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"'}.get(platform.system(), "sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk")
 
 
 def version_tuple(value):
@@ -85,8 +85,11 @@ def check_ffmpeg():
             r = invoke([ff, "-hide_banner", flag])
             text = r.stdout + r.stderr
             missing = [item for item in required if not re.search(r"\b" + re.escape(item) + r"\b", text)]
+            detail = "Missing: " + ", ".join(missing) if missing else "Required capabilities present"
+            if missing and platform.system() == "Darwin":
+                detail += "; use ffmpeg-full and prepend its bin directory to PATH. " + install_ffmpeg_hint()
             checks.append({"name": "ffmpeg_" + name, "ok": r.returncode == 0 and not missing,
-                           "required": True, "detail": "Missing: " + ", ".join(missing) if missing else "Required capabilities present"})
+                           "required": True, "detail": detail})
         except (OSError, subprocess.TimeoutExpired) as exc:
             checks.append({"name": "ffmpeg_" + name, "ok": False, "required": True, "detail": type(exc).__name__})
     try:
@@ -147,7 +150,7 @@ def check_agent(agent):
 
 
 def doctor(agent=None):
-    from pqc_common import INBOX, OUTBOX, VIDEO_ROOT
+    from pqc_common import INBOX, OUTBOX, VIDEO_ROOT, _detect_onedrive_root
     checks = [{"name": "python", "ok": MIN_PYTHON <= sys.version_info[:2] < MAX_PYTHON, "required": True,
                "detail": f"Python {platform.python_version()}; supported: 3.10 through 3.13"}]
     checks.extend(check_modules())
@@ -158,7 +161,7 @@ def doctor(agent=None):
     else:
         checks.append({"name": "agent", "ok": None, "required": False, "detail": "Not checked. Use --agent codex/claude for CLI auth, or --mode manual/template without a CLI."})
     configured = bool(os.environ.get("PQC_INBOX"))
-    onedrive = any(os.environ.get(k) and Path(os.environ[k]).exists() for k in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")) or (Path.home() / "OneDrive").exists()
+    onedrive = _detect_onedrive_root() != Path.home() / "Videos"
     checks.append({"name": "phone_sync", "ok": None, "required": False,
                    "detail": "Custom inbox: confirm cloud sync and offline availability yourself." if configured else
                    ("OneDrive detected; ensure the inbox is always available locally. Sync was not tested." if onedrive else "No OneDrive detected. Local Videos fallback works locally, but does not sync phone uploads.")})

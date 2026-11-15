@@ -14,7 +14,16 @@ cd phone-quick-cut
 python -X utf8 scripts/setup_env.py --install
 ```
 
-安裝程式將 Python 套件放入 repo 的 `.venv`，不修改全域 Python。FFmpeg 與字型若缺少，依檢查結果安裝後再檢查。Windows 可安裝 Gyan.FFmpeg；macOS 可使用 Homebrew；Linux 可使用系統套件管理員。FFmpeg 需要 `libx264` 與字幕濾鏡。
+安裝程式將 Python 套件放入 repo 的 `.venv`，不修改全域 Python。FFmpeg 與字型若缺少，依檢查結果安裝後再檢查。Windows 可安裝 Gyan.FFmpeg；Linux 可使用系統套件管理員。FFmpeg 需要 `libx264` 與字幕濾鏡。
+
+macOS 請使用包含 libass 的 [Homebrew ffmpeg-full](https://formulae.brew.sh/formula/ffmpeg-full)，並把它的 bin 放在 PATH 前面（一般 `ffmpeg` formula 可能沒有字幕濾鏡）：
+
+```bash
+brew install ffmpeg-full
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+```
+
+設定後重新執行環境檢查；使用排程時也要保存這個 PATH。
 
 接下來的 `python` 指已啟用的 repo 虛擬環境；也可直接使用：
 
