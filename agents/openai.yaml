@@ -1,0 +1,4 @@
+interface:
+  display_name: "手機快剪"
+  short_description: "OneDrive 收件匣的手機照片影片自動剪成 3 分鐘內主題短片"
+  default_prompt: "Use $phone-quick-cut to cut the newest folder in the OneDrive 手機快剪 inbox into a short video."
