@@ -46,7 +46,8 @@ def log(msg):
             with open(SRC / "_colab_log.txt", "a", encoding="utf-8") as f: f.write(line + "\n")
         except OSError: pass
 def status(s, *more):
-    (SRC / "_狀態.txt").write_text("\n".join([f"狀態：{s}", time.strftime("時間：%Y-%m-%d %H:%M（UTC）"), *more]), encoding="utf-8")
+    stamp = "時間：" + time.strftime("%Y-%m-%d %H:%M") + "（UTC）"
+    (SRC / "_狀態.txt").write_text("\n".join([f"狀態：{s}", stamp, *more]), encoding="utf-8")
 try:
     drive.mount("/content/drive")
     mounted = True

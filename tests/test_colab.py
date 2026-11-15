@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -103,8 +104,14 @@ class NotebookTests(unittest.TestCase):
             review_code,_=notebook_code(雲端硬碟資料夾="test",階段="重送目前稿（不重寫）",聲音="不要旁白",配樂=False)
             code,_=notebook_code(雲端硬碟資料夾="test",階段="台詞已確認，合成",聲音="不要旁白",配樂=False)
             captured = io.StringIO()
+            original_strftime = time.strftime
+            def ascii_strftime(pattern, *args):
+                # Python 3.10 Windows encodes strftime's format using the ANSI locale.
+                pattern.encode("ascii")
+                return original_strftime(pattern, *args)
             with patch.dict(sys.modules,{"google":google,"google.colab":colab,"pathlib":fakepath}), patch.dict(os.environ), \
-                 patch.object(sys,"path",list(sys.path)), patch("subprocess.run",side_effect=invoke), patch("time.sleep"), contextlib.redirect_stdout(captured):
+                 patch.object(sys,"path",list(sys.path)), patch("subprocess.run",side_effect=invoke), patch("time.sleep"), \
+                 patch("time.strftime",side_effect=ascii_strftime), contextlib.redirect_stdout(captured):
                 exec(review_code,{})
                 self.assertTrue((source/"_狀態.txt").is_file(),captured.getvalue())
                 self.assertIn("狀態：待審閱",(source/"_狀態.txt").read_text(encoding="utf-8"))
