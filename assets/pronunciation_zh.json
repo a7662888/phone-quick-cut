@@ -1,0 +1,19 @@
+{
+  "description": "TTS-only substitutions; captions retain the original text. Override with PQC_PRONUNCIATION.",
+  "entries": [
+    {"src": "阿茲海默", "say": "阿資海默", "engines": ["all"]},
+    {"src": "肌酸酐", "say": "肌酸肝", "engines": ["all"]},
+    {"src": "固著", "say": "固卓", "engines": ["all"]},
+    {"src": "挑戰", "say": "窕戰", "engines": ["all"]},
+    {"src": "標籤", "say": "標簽", "engines": ["all"]},
+    {"src": "確認", "say": "確任", "engines": ["all"]},
+    {"src": "貧乏", "say": "蘋乏", "engines": ["all"]},
+    {"src": "馬偕", "say": "馬街", "engines": ["all"]},
+    {"src": "軸", "say": "妯", "engines": ["all"]},
+    {"src": "釐", "say": "離", "engines": ["all"]},
+    {"src": "鈍", "say": "頓", "engines": ["all"]},
+    {"src": "錐", "say": "追", "engines": ["all"]},
+    {"src": "閡", "say": "何", "engines": ["all"]},
+    {"src": "髂", "say": "恰", "engines": ["all"]}
+  ]
+}

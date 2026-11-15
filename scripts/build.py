@@ -19,14 +19,14 @@ from pathlib import Path
 
 import numpy as np
 
-from pqc_common import (FONT, FPS, IS_WIN, MAX_SECONDS, ON_COLAB, RATIOS, apply_pron, duration, edge_tts_cmd,
-                        project_dirs, read_json, run, safe_name, write_json)
+from pqc_common import (FPS, MAX_SECONDS, ON_COLAB, RATIOS, api_key, apply_pron, duration, edge_tts_cmd,
+                        env_enabled, find_font_path, font_family, project_dirs, read_json, run, safe_name, write_json)
 
 SR = 48000
 LEAD = 0.25          # 旁白在鏡頭開始後多久開口
 TAIL = 0.45          # 旁白結束後鏡頭至少再停多久
-MAX_FREEZE = 2.0     # 為了不跨剪接點最多停格幾秒；超過就照舊跨鏡頭借素材
-LYRIA = Path(__file__).resolve().parents[2] / "slide-video-workflow" / "scripts" / "lyria_bgm.py"
+MAX_FREEZE = 2.0     # 超過此值就要求縮短台詞／鏡頭，絕不跨剪接點
+LYRIA = Path(__file__).resolve().parent / "lyria_bgm.py"
 
 
 # ---------- 配音 ----------
@@ -91,13 +91,13 @@ def plan(script, cands, tts_dir):
         sh["freeze"] = 0.0
         if c["kind"] == "video":
             ss, se = c.get("scene") or (0.0, c["src_dur"])
-            if not (ss - 0.05 <= sh["in"] < se):  # 腳本自選的起點不在該鏡頭內 → 不受鏡頭限制
-                ss, se = 0.0, c["src_dur"]
-            # 先在同一鏡頭內往前借、再停格；停格會超過 MAX_FREEZE 秒才退回跨剪接點借素材
+            if not (ss <= sh["in"] < se):
+                raise ValueError(f"第 {i} 鏡起點不在候選鏡頭 {ss:.2f}–{se:.2f} 秒內；請改選候選片段")
+            # 借同一鏡頭的素材，之後最多停格兩秒；不擴大 scene 範圍。
             in_s = max(ss, se - ln) if ln > se - sh["in"] else sh["in"]
-            if ln - (se - in_s) > MAX_FREEZE:
-                se = c["src_dur"]
-                in_s = max(0.0, se - ln) if ln > se - sh["in"] else sh["in"]
+            if ln - (se - in_s) > MAX_FREEZE + 0.001:
+                raise ValueError(f"第 {i} 鏡需 {ln:.2f} 秒，但同一鏡頭只有 {se - ss:.2f} 秒，"
+                                 f"最多停格 {MAX_FREEZE:.0f} 秒；請縮短旁白／dur 或換較長候選")
             sh["in"] = in_s
             sh["freeze"] = max(0.0, ln - (se - in_s))
         sh["len"] = round(ln, 3)
@@ -149,7 +149,8 @@ def render_shot(sh, W, H, fade, last, out, crf, preset):
     if c["kind"] == "photo":
         cmd += ["-i", c["path"]]
     else:
-        cmd += ["-ss", f"{sh['in']:.3f}", "-t", f"{ln - sh['freeze'] + 0.1:.3f}", "-i", c["path"]]
+        # Bound decode duration too: an extra 0.1s could leak the next scene into tpad.
+        cmd += ["-ss", f"{sh['in']:.3f}", "-t", f"{ln - sh['freeze']:.3f}", "-i", c["path"]]
     cmd += ["-f", "lavfi", "-t", f"{ln:.3f}", "-i", f"anullsrc=r={SR}:cl=stereo"]
     fc = shot_filter(sh, W, H, fade, last)
     if sh["keep_audio"] and c["kind"] == "video" and c.get("has_audio"):
@@ -216,24 +217,28 @@ def get_music(script, seconds, mdir):
         return None
     prompt = m.get("prompt") or "gentle acoustic background music"
     prov = m.get("provider", "auto")
-    h = hashlib.md5(f"{prov}|{prompt}".encode()).hexdigest()[:10]
-    for ext in (".mp3", ".wav"):  # 只認音訊；Lyria 失敗會留 .mp3.response.json，不能當成音樂
+    h = hashlib.md5(f"{prov}|{prompt}|{script.get('style')}|{seconds:.3f}".encode()).hexdigest()[:10]
+    for ext in (".mp3", ".wav", "_synth.wav"):
         f = mdir / f"music_{h}{ext}"
         if f.exists() and f.stat().st_size > 0:
             return f
-    tries = {"auto": (["musicgen", "synth"] if ON_COLAB else ["lyria", "synth"])}.get(prov, [prov, "synth"])
+    if prov == "auto":
+        tries = ["lyria", "synth"] if api_key() and env_enabled("PQC_ALLOW_PAID_MUSIC") else ["synth"]
+    else:
+        tries = [prov] + (["synth"] if prov != "synth" else [])
+    if prov not in ("auto", "lyria", "musicgen", "synth"):
+        raise ValueError(f"未知配樂 provider：{prov}")
     for p in tries:
         try:
             if p == "lyria":
                 out = mdir / f"music_{h}.mp3"
-                # Google 會以 RECITATION（太像現有曲子）擋下，換種子重試（2026-11-15 實測）
-                for seed in (None, 23, 71):
-                    r = subprocess.run([sys.executable, "-X", "utf8", str(LYRIA), "--prompt", prompt, "-o", str(out),
-                                        "--model", "google/lyria-3-pro-preview"] + (["--seed", str(seed)] if seed else []),
-                                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
-                    if r.returncode == 0 and out.exists() and out.stat().st_size > 0:
-                        break
-                    print(f"[build] Lyria 未產出（seed={seed}）：{(r.stderr or r.stdout)[-160:]}", file=sys.stderr)
+                if not api_key() or not env_enabled("PQC_ALLOW_PAID_MUSIC"):
+                    raise RuntimeError("Lyria 需金鑰及 PQC_ALLOW_PAID_MUSIC=1；改用本機配樂")
+                r = subprocess.run([sys.executable, "-X", "utf8", str(LYRIA), "--prompt", prompt, "-o", str(out)],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
+                if r.returncode:
+                    raise RuntimeError(f"Lyria 未產出：{r.stderr[-160:]}")
+                duration(out)  # Reject non-audio responses before caching them.
             elif p == "musicgen":
                 out = mdir / f"music_{h}.wav"
                 musicgen(out, seconds, prompt)
@@ -281,6 +286,7 @@ def esc(t):
 
 
 def make_ass(script, shots, total, W, H, path):
+    FONT = font_family()
     portrait = H > W
     fs = round((0.066 if portrait else 0.058) * min(W, H))
     maxc = max(8, int((W * 0.86) / fs))
@@ -355,6 +361,10 @@ def main():
     script = read_json(d["script"] / "script.json")
     brief = read_json(d["script"] / "brief.json", {})
     index = read_json(d["media"] / "media_index.json")
+    from write_script import validate
+    errors, _ = validate(script, index, brief)
+    if errors:
+        raise SystemExit("[build] 腳本無效：" + "；".join(errors))
     cands = {c["id"]: c for c in index["candidates"]}
     work = d["media"] / "work"
     for sub in ("tts", "shots", "music"):
@@ -431,8 +441,13 @@ def main():
         n_in = 3
     fc += [f"{mix_in}amix=inputs={n_in}:normalize=0:duration=first,loudnorm=I=-16:TP=-1.5:LRA=11[aout]"]
     sub_filter = "subtitles=subs.ass"
-    if ON_COLAB:
-        sub_filter += ":fontsdir=/usr/share/fonts"
+    font_path = find_font_path()
+    if not font_path:
+        raise SystemExit("[build] 缺少中文字型；請設定 PQC_FONT_FILE")
+    font_dir = work / "fonts"
+    font_dir.mkdir(exist_ok=True)
+    shutil.copy2(font_path, font_dir / ("subtitle" + font_path.suffix))
+    sub_filter += ":fontsdir=fonts"
     mix = work / f"{tag}_mix.wav"
     cmd += ["-filter_complex", ";".join(fc), "-map", "[aout]", "-t", f"{total:.3f}", "-ar", str(SR), mix.resolve()]
     run(cmd, cwd=work)
@@ -444,6 +459,7 @@ def main():
     timeline = [{"i": s["i"], "cand": s["cand"]["id"], "start": s["start"], "len": s["len"], "in": s["in"],
                  "freeze": s["freeze"], "narration": s["narration"], "keep_audio": s["keep_audio"]} for s in shots]
     write_json(d["out"] / "timeline.json", {"total": round(total, 2), "size": [W, H], "music": str(music) if music else None,
+                                             "expect_audio": has_voice or bool(music) or any(s["keep_audio"] and s["cand"].get("has_audio") for s in shots),
                                              "voice": script["voice"], "voice_requested": script.get("voice_requested"),
                                              "final": str(final), "shots": timeline})
     print(f"[build] 完成：{final}（{duration(final):.1f} 秒）")

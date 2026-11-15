@@ -1,0 +1,5 @@
+# Optional local MusicGen model; not installed by default. Model weights download on first use.
+torch>=2.4.0,<3
+transformers>=4.45.0,<5
+sentencepiece>=0.2.0,<0.3
+scipy>=1.11.0,<2

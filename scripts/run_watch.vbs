@@ -1,5 +1,8 @@
-' Task Scheduler entry: run one inbox scan with a hidden window (ASCII only: wscript reads ANSI).
-' Child processes (python, ffmpeg, codex) share the hidden console, so no window flashes.
+' Compatibility launcher; first generate .pqc-schedule with install_schedule.py.
+' This source stays ASCII so WScript does not misread UTF-8 comments.
+Set fs = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
-cmd = "cmd /c py -3 -X utf8 ""D:\secondbrain\Skills\phone-quick-cut\scripts\watch_inbox.py"" --once --agent codex > ""%TEMP%\pqc_watch.log"" 2>&1"
-sh.Run cmd, 0, True
+root = fs.GetParentFolderName(fs.GetParentFolderName(WScript.ScriptFullName))
+runner = fs.BuildPath(root, ".pqc-schedule\run_watch.vbs")
+If Not fs.FileExists(runner) Then WScript.Quit 2
+WScript.Quit sh.Run("wscript.exe " & Chr(34) & runner & Chr(34), 0, True)

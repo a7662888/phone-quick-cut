@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """一鍵跑管線。預設有「台詞審閱」關卡：寫完腳本先送審，業主確認後才合成。
 
-  新片：   run_job.py --src "E:\\OneDrive\\手機快剪\\收件匣\\陽明山"        → intake、analyze、腳本、送審（狀態：待審閱）
+  新片：   run_job.py --src "<收件匣子夾>" --mode manual                 → intake、analyze、待目前 Agent 寫稿
   改台詞： run_job.py --project <專案> --revise "第3句改成…"              → 改腳本、再送審
   確認後： run_job.py --project <專案> --approve                          → 合成、QA、交付（狀態：完成）
   不審閱： 加 --no-review（或環境變數 PQC_REVIEW=0），一路做到交付
@@ -11,6 +11,7 @@
 任何一步失敗都會在收件匣子夾寫「_狀態.txt：失敗」並附原因，手機上看得到。
 """
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -25,7 +26,7 @@ PROCESSED = ""
 
 def deliver(project, status, note=""):
     subprocess.run([sys.executable, "-X", "utf8", str(HERE / "deliver.py"), "--project", project, "--status", status,
-                    "--note", note, "--processed", PROCESSED])
+                    "--note", note, "--processed", PROCESSED], check=True)
 
 
 def step(name, args, project=None):
@@ -49,10 +50,11 @@ def main():
     ap.add_argument("--project")
     ap.add_argument("--revise")
     ap.add_argument("--approve", action="store_true", help="台詞已確認，直接合成交付")
+    ap.add_argument("--submit-script", action="store_true", help="驗證目前 Agent 寫好的 script.json，產生審閱稿")
     ap.add_argument("--processed", "--revise-files", dest="processed", default="")
     ap.add_argument("--no-review", action="store_true")
-    ap.add_argument("--agent", default=os.environ.get("PQC_AGENT", "claude"), choices=["claude", "codex"])
-    ap.add_argument("--mode", default="auto")
+    ap.add_argument("--agent", default=os.environ.get("PQC_AGENT", "codex"), choices=["claude", "codex"])
+    ap.add_argument("--mode", choices=["agent", "llm", "template", "auto", "manual"], default="auto")
     ap.add_argument("--draft", action="store_true")
     ap.add_argument("--no-speech", action="store_true")
     a = ap.parse_args()
@@ -60,6 +62,8 @@ def main():
     review = not a.no_review and os.environ.get("PQC_REVIEW", "1") != "0"
     if not (a.src or a.project):
         ap.error("需要 --src 或 --project")
+    if sum(bool(v) for v in (a.approve, a.submit_script, a.revise)) > 1:
+        ap.error("--approve、--submit-script、--revise 不能同時使用")
     proj = a.project
     if a.src and not proj:
         out = step("intake", ["--src", a.src]).stdout
@@ -67,9 +71,24 @@ def main():
         brief = read_json(Path(proj) / "01_查核與腳本" / "brief.json")
         deliver(proj, "處理中", f"主題 {brief['theme']}｜{brief['style']}｜{brief['target_seconds']} 秒｜{brief['ratio']}")
         step("analyze", ["--project", proj] + (["--no-speech"] if a.no_speech else []), proj)
+    if a.submit_script:
+        step("write_script", ["--project", proj, "--validate-only"], proj)
+        step("review", ["--project", proj], proj)
+        deliver(proj, "待審閱", "目前 Agent 的台詞稿已通過驗證，等你確認")
+        return
+    if a.approve:
+        script_dir = Path(proj) / "01_查核與腳本"
+        stamp = read_json(script_dir / "review.json", {})
+        script_file = script_dir / "script.json"
+        if not script_file.is_file() or stamp.get("script_sha256") != hashlib.sha256(script_file.read_bytes()).hexdigest():
+            ap.error("目前腳本尚未送審或送審後已變更；請先執行 --submit-script，再確認台詞")
     if not a.approve:
         ws = ["--project", proj, "--mode", a.mode, "--agent", a.agent] + (["--revise", a.revise] if a.revise else [])
         step("write_script", ws, proj)
+        if a.mode == "manual":
+            deliver(proj, "待寫稿", "請目前 Agent 讀取 01_查核與腳本/script_request.md，完成後執行 --submit-script")
+            print(f"PROJECT={proj}")
+            return
         if review:
             step("review", ["--project", proj], proj)
             deliver(proj, "待審閱", "台詞稿已產生，等你確認")

@@ -6,6 +6,7 @@
 結果寫 04_QA\\qa.json；有任何 FAIL 時結束碼為 1。WARN 不擋交付，但要在回報裡說。
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -82,7 +83,11 @@ def main():
     tl = read_json(d["out"] / "timeline.json")
     brief = read_json(d["script"] / "brief.json", {})
     f = Path(a.file or tl["final"])
-    res, fails, warns = {"file": str(f)}, [], []
+    digest = hashlib.sha256()
+    with f.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    res, fails, warns = {"file": str(f), "sha256": digest.hexdigest()}, [], []
     dur = duration(f)
     res["duration"] = round(dur, 2)
     if dur > MAX_SECONDS + 0.5:
@@ -92,7 +97,7 @@ def main():
         warns.append(f"長度 {dur:.0f} 秒和任務單 {tgt} 秒差距大（素材不夠或腳本太短／太長）")
     li, peak = loudness(f)
     res.update(lufs=li, true_peak=peak)
-    if li is None or not (-19 <= li <= -13):
+    if tl.get("expect_audio", True) and (li is None or not (-19 <= li <= -13)):
         warns.append(f"整體響度 {li} LUFS（目標 -16）")
     if peak is not None and peak > -0.5:
         fails.append(f"真峰值 {peak} dBFS 會破音")
@@ -105,7 +110,7 @@ def main():
     if not tl.get("music") and read_json(d["script"] / "script.json", {}).get("music", {}).get("enabled", True):
         warns.append("配樂生成失敗，成片沒有音樂")
     elif tl.get("music") and "synth" in str(tl["music"]):
-        warns.append("配樂用保底合成和弦（Lyria／MusicGen 失敗），音質普通")
+        warns.append("配樂使用本機合成和弦（可能是指定來源或備援），不是 Lyria／MusicGen 生成音樂")
     script = read_json(d["script"] / "script.json")
     ref = "".join(s.get("narration", "") for s in script["shots"])
     narr = d["media"] / "work" / ("d_narration.wav" if "草稿" in f.name else "f_narration.wav")

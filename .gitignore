@@ -1,0 +1,14 @@
+# Local environments and generated artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.ci-font/
+.pqc/
+.env
+.env.*
+!.env.example
+*.log
+.pqc-schedule/

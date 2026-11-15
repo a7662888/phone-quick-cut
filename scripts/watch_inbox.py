@@ -58,7 +58,7 @@ def log(msg):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
-    ap.add_argument("--agent", default=os.environ.get("PQC_AGENT", "claude"))
+    ap.add_argument("--agent", choices=["claude", "codex"], default=os.environ.get("PQC_AGENT", "codex"))
     ap.add_argument("--settle", type=int, default=120)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -98,7 +98,15 @@ def main():
         if a.dry_run:
             print("  dry-run：", job)
             return
-        lock.write_text(str(os.getpid()), encoding="utf-8")
+        if lock.exists() and time.time() - lock.stat().st_mtime >= 3 * 3600:
+            lock.unlink(missing_ok=True)
+        try:
+            fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            print("另一件已取得工作鎖，略過")
+            return
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
         try:  # 一次只做一件，下一輪排程再接下一件
             r = subprocess.run([sys.executable, "-X", "utf8", str(HERE / "run_job.py"), *job, "--agent", a.agent],
                                capture_output=True, text=True, encoding="utf-8", errors="replace")

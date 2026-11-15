@@ -16,17 +16,16 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from pqc_common import IS_WIN, PHOTO_EXT, VIDEO_EXT, ffprobe, project_dirs, read_json, run, write_json
+from pqc_common import PHOTO_EXT, VIDEO_EXT, ffprobe, find_font_path, project_dirs, read_json, run, write_json
 
 S = 128  # 分析用縮圖邊長
 
 
 def font(size):
-    for p in [r"C:\Windows\Fonts\NotoSansTC-VF.ttf", r"C:\Windows\Fonts\msjh.ttc",
-              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"]:
-        if Path(p).exists():
-            return ImageFont.truetype(p, size)
-    return ImageFont.load_default()
+    p = find_font_path()
+    if not p:
+        raise RuntimeError("缺少中文字型；請安裝 Noto Sans CJK TC 或設定 PQC_FONT_FILE")
+    return ImageFont.truetype(str(p), size)
 
 
 def lap_var(g):
@@ -134,8 +133,10 @@ def scene_of(t, cuts, dur):
 def pick_windows(score, dur, clip, fps=2, speech=(), cuts=()):
     """在每個鏡頭內滑動視窗挑高分且不重疊的片段，不跨剪接點；落在講話上時對齊整句（不超出該鏡頭）。"""
     bounds = [0.0, *[c for c in cuts if 0 < c < dur], dur]
-    scenes = [(a, b) for a, b in zip(bounds, bounds[1:]) if b - a >= MIN_SCENE] or [(0.0, dur)]
-    if len(scenes) == 1 and dur <= clip + 0.5:
+    scenes = [(a, b) for a, b in zip(bounds, bounds[1:]) if b - a >= MIN_SCENE]
+    if not scenes:
+        scenes = [(a, b) for a, b in zip(bounds, bounds[1:]) if b - a >= 0.1]
+    if len(bounds) == 2 and dur <= clip + 0.5:
         return [(0.0, dur, float(score.mean()) if len(score) else 0.5)]
     k = max(1, int(clip * fps))
     opts = []  # (起, 長, 分)
@@ -204,12 +205,13 @@ def main():
     (work / "photos").mkdir(exist_ok=True)
     (work / "thumbs").mkdir(exist_ok=True)
     model = None
-    if not a.no_speech:
+    source_files = sorted((d["media"] / "src").iterdir())
+    if not a.no_speech and any(f.suffix.lower() in VIDEO_EXT for f in source_files):
         from faster_whisper import WhisperModel
         model = WhisperModel(a.whisper, device="cpu", compute_type="int8")
     items, problems = [], []
     no_sd = False
-    for f in sorted((d["media"] / "src").iterdir()):
+    for f in source_files:
         ext = f.suffix.lower()
         try:
             if ext in PHOTO_EXT:
@@ -230,8 +232,7 @@ def main():
                 speech = speech_segments(f, model) if model and m["has_audio"] else []
                 cuts = scene_cuts(f)
                 if cuts is None:
-                    no_sd = True
-                    cuts = []
+                    raise RuntimeError("剪接點偵測失敗；請檢查 scenedetect 安裝與影片格式")
                 wins = pick_windows(score, m["dur"], a.clip, speech=speech, cuts=cuts)
                 items.append({"file": f.name, "kind": "video", "path": str(f), "w": m["w"], "h": m["h"],
                               "time": m["time"], "windows": wins, "speech": speech, "src_dur": m["dur"],
@@ -264,6 +265,8 @@ def main():
     idx = {"project": str(Path(a.project)), "candidates": cands, "problems": problems, "contact_sheets": sheets,
            "total_candidate_seconds": round(sum(c["dur"] for c in cands if not c["weak"]), 1)}
     write_json(d["media"] / "media_index.json", idx)
+    if not cands:
+        raise SystemExit("[analyze] 沒有可用候選片段；" + "；".join(problems))
     print(f"[analyze] 候選 {len(cands)} 段（weak {sum(c['weak'] for c in cands)}），可用約 {idx['total_candidate_seconds']} 秒")
     if no_sd:
         print("[analyze] ⚠ 沒有 scenedetect，挑段不偵測剪接點（py -3 -m pip install scenedetect）")

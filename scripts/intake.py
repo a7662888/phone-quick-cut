@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """收件：把收件匣裡的一個子夾建成影片專案，並把語音任務單轉成 brief.json。
 
-  py -3 -X utf8 intake.py --src "E:\\OneDrive\\手機快剪\\收件匣\\陽明山" [--project <既有專案夾>]
+  python -X utf8 intake.py --src "<收件匣子夾>" [--project <既有專案夾>]
 
 - 素材「複製」進 02_素材\\src，不移動、不改名、不刪收件匣原檔。
 - 任務單：純音訊檔（語音備忘）或 任務.txt。語音用 faster-whisper（CPU）轉文字，再以關鍵字解析：
@@ -74,7 +74,7 @@ def parse_brief(text, fallback_title):
     if not brief["style"]:
         brief["style"], _ = "溫馨", guessed.append("style")
     sec = parse_length(text)
-    brief["target_seconds"] = min(MAX_SECONDS, max(15, sec)) if sec else 90
+    brief["target_seconds"] = min(MAX_SECONDS, max(1, sec)) if sec else 90
     if not sec:
         guessed.append("target_seconds")
     brief["ratio"] = next((k for k, ws in RATIO_WORDS.items() if any(w in t for w in ws)), None)
@@ -133,7 +133,7 @@ def main():
     ap.add_argument("--src", required=True, help="收件匣裡的子夾")
     ap.add_argument("--project", help="沿用既有專案（修改模式）")
     a = ap.parse_args()
-    src = Path(a.src)
+    src = Path(a.src).expanduser().resolve()
     media, briefs, _ = classify(src)
     if not media:
         raise SystemExit(f"{src} 裡沒有照片或影片")
@@ -142,7 +142,7 @@ def main():
     brief["inbox_folder"] = str(src)
     brief["brief_files"] = [f.name for f in briefs]
     if a.project:
-        proj = Path(a.project)
+        proj = Path(a.project).expanduser().resolve()
     else:
         proj = VIDEO_ROOT / f"{datetime.date.today():%Y%m%d}_手機快剪_{safe_name(brief['theme'])}"
         n = 2

@@ -10,6 +10,7 @@
 業主回覆：放「確認」開頭的檔＝同意合成；放「修改」開頭的語音或文字＝改台詞後再送審。
 """
 import argparse
+import hashlib
 import math
 import shutil
 import textwrap
@@ -18,7 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from analyze import font
-from pqc_common import project_dirs, read_json
+from pqc_common import project_dirs, read_json, write_json
 
 VOICE_NAME = {"zh-TW-YunJheNeural": "男聲", "zh-TW-HsiaoChenNeural": "女聲", "zh-TW-HsiaoYuNeural": "女聲2"}
 
@@ -70,11 +71,14 @@ def main():
     cands = {c["id"]: c for c in read_json(d["media"] / "media_index.json")["candidates"]}
     rows, total = estimate(script, cands)
     m = script.get("music", {})
+    voice_label = VOICE_NAME.get(script["voice"], script["voice"]) if any(s.get("narration") for s in script["shots"]) else "無旁白"
     lines = [f"【台詞稿】{script['title']}",
-             f"{script['style']}｜{script['ratio']}｜{VOICE_NAME.get(script['voice'], script['voice'])}｜約 {round(total)} 秒"
+             f"{script['style']}｜{script['ratio']}｜{voice_label}｜約 {round(total)} 秒"
              f"（目標 {brief.get('target_seconds', '?')} 秒）",
              f"片尾字卡：{script.get('outro') or '（無）'}",
-             f"配樂：{'無' if not m.get('enabled', True) else m.get('prompt', '自動')}", ""]
+             f"配樂：{'無' if not m.get('enabled', True) else m.get('prompt', '自動')}",
+             f"寫稿模式：{script.get('_meta', {}).get('written_by', '目前 Agent／手動')}"
+             "（template 為保底模板，llm 不會看畫面；請核對內容）", ""]
     for i, t0, t1, c, s in rows:
         lines.append(f"{i:02d}  {mmss(t0)}–{mmss(t1)}  {c['file']}")
         if s.get("caption"):
@@ -86,13 +90,14 @@ def main():
         else:
             lines.append("    （無旁白）")
     lines += ["", "──── 怎麼回覆 ────",
-              "同意：在這個資料夾放一個「確認」開頭的檔（例如錄音存成「確認」），電腦就開始合成。",
-              "要改：放「修改」開頭的語音或文字，例如「第3句改成…」「刪掉第5鏡」「片名改成…」，改好會再送一次台詞稿。",
-              "對照圖：_分鏡預覽.jpg（編號同上）"]
+              "手動模式：回覆目前的 Agent，確認後由 Agent 執行 --approve；要改先告知 Agent，再重新送審。",
+              "已啟用背景掃描時：放一個「確認」開頭的檔表示同意；放「修改」開頭的語音或文字表示改稿。",
+              "對照圖：_分鏡預覽.jpg（編號同上，只供選片與台詞核對；標題遮擋需看合成草稿）"]
     text = "\n".join(lines)
     (d["script"] / "台詞稿.txt").write_text(text, encoding="utf-8")
     prev = d["qa"] / "分鏡預覽.jpg"
     preview(rows, prev)
+    write_json(d["script"] / "review.json", {"script_sha256": hashlib.sha256((d["script"] / "script.json").read_bytes()).hexdigest()})
     inbox = brief.get("inbox_folder")
     if inbox and Path(inbox).exists():
         Path(inbox, "_台詞稿.txt").write_text(text, encoding="utf-8")

@@ -5,7 +5,9 @@
 """
 import argparse
 import datetime
+import hashlib
 import shutil
+import sys
 from pathlib import Path
 
 from pqc_common import OUTBOX, project_dirs, read_json
@@ -38,13 +40,23 @@ def main():
     brief = read_json(d["script"] / "brief.json", {})
     if a.status != "完成":
         extra = (["台詞稿：看 _台詞稿.txt 與 _分鏡預覽.jpg",
-                  "同意請放「確認」開頭的檔；要改請放「修改」開頭的語音或文字"] if a.status == "待審閱" else [])
+                  "手動模式請回覆目前的 Agent；已啟用背景掃描時，才用「確認」／「修改」開頭的檔回覆"] if a.status == "待審閱" else [])
         status_file(brief, a.status, [a.note] + extra + [f"專案：{a.project}"], a.processed)
         print(f"[deliver] 已標記 {a.status}")
         return
     tl = read_json(d["out"] / "timeline.json")
     qa = read_json(d["qa"] / "qa.json", {})
+    if qa.get("verdict") != "PASS" or qa.get("fails"):
+        raise SystemExit("[deliver] QA 尚未通過，禁止標記完成或複製成片")
     src = Path(tl["final"])
+    if not qa.get("file") or Path(qa["file"]).resolve() != src.resolve():
+        raise SystemExit("[deliver] QA 不是目前成片的結果；請重新執行 QA")
+    digest = hashlib.sha256()
+    with src.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if qa.get("sha256") != digest.hexdigest():
+        raise SystemExit("[deliver] 成片在 QA 後已變更；請重新執行 QA")
     OUTBOX.mkdir(parents=True, exist_ok=True)
     stamp = f"{datetime.datetime.now():%m%d_%H%M}"
     dst = OUTBOX / f"{src.stem}_{stamp}{src.suffix}"
@@ -71,7 +83,7 @@ def main():
 
 ## 下一步
 - 修改：收件匣子夾放「修改*.m4a／修改*.txt」，或手動
-  `py -3 -X utf8 D:/secondbrain/Skills/phone-quick-cut/scripts/run_job.py --project "{a.project}" --revise "<要求>"`
+  `"{sys.executable}" -X utf8 "{Path(__file__).resolve().parent / 'run_job.py'}" --project "{a.project}" --revise "<要求>"`
 """, encoding="utf-8")
     print(f"[deliver] 已放到 {dst}")
 

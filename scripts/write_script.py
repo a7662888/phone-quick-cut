@@ -10,13 +10,15 @@
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-from pqc_common import MAX_SECONDS, ON_COLAB, find_agent, project_dirs, read_json, write_json
+from pqc_common import (MAX_SECONDS, ON_COLAB, RATIOS, STYLES, agent_command, api_key, env_enabled,
+                        project_dirs, read_json, write_json)
 
 SKILL = Path(__file__).resolve().parents[1]
 MUSIC = {"創意": "upbeat quirky indie pop, plucky synths, claps, 110 bpm",
@@ -31,16 +33,55 @@ CLOSE = {"創意": "下次，換你出發。", "溫馨": "謝謝這一天，我�
 
 
 def validate(script, index, brief):
-    ids = {c["id"]: c for c in index["candidates"]}
     errs = []
+    if not isinstance(script, dict):
+        return ["script.json 必須是 JSON 物件"], 0
+    if not isinstance(index, dict) or not index.get("candidates"):
+        return ["media_index.json 沒有候選片段"], 0
+    ids = {c["id"]: c for c in index["candidates"]}
     for k in ("title", "style", "ratio", "voice", "shots"):
         if k not in script:
             errs.append(f"缺欄位 {k}")
-    for i, s in enumerate(script.get("shots", []), 1):
-        if s.get("cand") not in ids:
-            errs.append(f"第 {i} 鏡的 cand {s.get('cand')} 不在 media_index.json")
-    est = sum(max(s.get("dur", ids.get(s.get("cand"), {}).get("dur", 3)), len(s.get("narration", "")) / 4.2 + 0.6)
-              for s in script.get("shots", []))
+    for k in ("title", "voice"):
+        if not isinstance(script.get(k), str) or not script[k].strip():
+            errs.append(f"{k} 必須是非空文字")
+    if not isinstance(script.get("style"), str) or script["style"] not in STYLES or not isinstance(script.get("ratio"), str) or script["ratio"] not in RATIOS:
+        errs.append("style／ratio 不是支援的值")
+    if script.get("title_pos", "center") not in ("top", "center"):
+        errs.append("title_pos 必須是 top 或 center")
+    if not isinstance(script.get("music", {}), dict):
+        errs.append("music 必須是 JSON 物件")
+    elif script.get("music", {}).get("provider", "auto") not in ("auto", "synth", "lyria", "musicgen"):
+        errs.append("未知 music.provider")
+    shots = script.get("shots")
+    if not isinstance(shots, list) or not shots:
+        return errs + ["shots 必須是非空陣列"], 0
+    est = 0.0
+    for i, s in enumerate(shots, 1):
+        if not isinstance(s, dict) or not isinstance(s.get("cand"), str) or s["cand"] not in ids:
+            errs.append(f"第 {i} 鏡沒有有效的 cand")
+            continue
+        c = ids[s["cand"]]
+        for field in ("narration", "caption", "speech_caption"):
+            if not isinstance(s.get(field, ""), str):
+                errs.append(f"第 {i} 鏡 {field} 必須是文字")
+        if errs:
+            continue
+        dur, start = s.get("dur", c["dur"]), s.get("in", c["in"])
+        if any(isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v) for v in (dur, start)) or dur <= 0 or start < 0:
+            errs.append(f"第 {i} 鏡 in／dur 必須是有效正數（in 可為零）")
+            continue
+        narration = s.get("narration", "")
+        if brief.get("no_narration") and narration:
+            errs.append(f"第 {i} 鏡任務指定不要旁白，請清空 narration")
+        length = max(dur, len(narration) / 4.2 + 0.7 if narration else 0, 1.0)
+        est += length
+        if c["kind"] == "video":
+            ss, se = c.get("scene") or (0, c["src_dur"])
+            if not ss <= start < se:
+                errs.append(f"第 {i} 鏡起點不在候選鏡頭內")
+            if length > se - ss + 2.0 + 0.01:
+                errs.append(f"第 {i} 鏡長於同鏡頭素材加兩秒停格；請縮短旁白／dur 或換候選")
     limit = min(MAX_SECONDS, brief.get("target_seconds", 90) * 1.1)
     if est > limit:
         errs.append(f"估計長度 {est:.0f} 秒超過上限 {limit:.0f} 秒")
@@ -61,17 +102,15 @@ def agent_prompt(d, brief, revise):
 
 
 def run_agent(agent, d, brief, revise):
-    exe = find_agent(agent)
-    if not exe:
-        raise RuntimeError(f"找不到 {agent} 執行檔")
+    command = agent_command(agent)
     prompt = agent_prompt(d, brief, revise)
     proj = str(d["script"].parent)
     if agent == "claude":
-        cmd = [exe, "-p", prompt, "--allowedTools", "Read", "Write", "Edit", "Glob",
+        cmd = command + ["-p", prompt, "--allowedTools", "Read", "Write", "Edit", "Glob",
                "--permission-mode", "acceptEdits", "--add-dir", proj, str(SKILL)]
     else:
         sheets = read_json(d["media"] / "media_index.json")["contact_sheets"]
-        cmd = [exe, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", proj, "--ephemeral"]
+        cmd = command + ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", proj, "--ephemeral"]
         for s in sheets:
             cmd += ["-i", s]
         cmd += ["--", prompt]
@@ -83,6 +122,8 @@ def run_agent(agent, d, brief, revise):
 
 
 def llm_complete(prompt):
+    if not env_enabled("PQC_ALLOW_CLOUD"):
+        raise RuntimeError("文字雲端模式需先設定 PQC_ALLOW_CLOUD=1；任務單、檔名與現場逐字稿會送至模型服務")
     if ON_COLAB:
         try:
             from google.colab import ai  # Colab 內建、免金鑰
@@ -94,11 +135,7 @@ def llm_complete(prompt):
             os.environ.setdefault("OPENROUTER_API_KEY", userdata.get("OPENROUTER_API_KEY"))
         except Exception:
             pass
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key and os.name == "nt":
-        key = subprocess.run(["powershell", "-NoProfile", "-Command",
-                              '[Environment]::GetEnvironmentVariable("OPENROUTER_API_KEY","User")'],
-                             capture_output=True, text=True).stdout.strip()
+    key = api_key()
     if not key:
         raise RuntimeError("沒有可用的 LLM（無 Colab AI、無 OPENROUTER_API_KEY）")
     import requests
@@ -111,7 +148,8 @@ def llm_complete(prompt):
 
 
 def run_llm(d, brief, index, revise):
-    cands = [{k: c[k] for k in ("id", "kind", "dur", "time", "score", "weak", "speech_text", "file")} for c in index["candidates"]]
+    cands = [{k: c[k] for k in ("id", "kind", "dur", "time", "score", "weak", "speech_text", "file", "scene") if k in c}
+             for c in index["candidates"]]
     prompt = ("你是短影片剪輯師。依下列風格說明與格式，輸出一個 script.json（只輸出 JSON，不要其他文字）。\n\n"
               + (SKILL / "references" / "styles.md").read_text(encoding="utf-8") + "\n\n"
               + (SKILL / "references" / "script-format.md").read_text(encoding="utf-8")
@@ -163,13 +201,25 @@ def run_template(d, brief, index):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True)
-    ap.add_argument("--mode", choices=["agent", "llm", "template", "auto"], default="auto")
-    ap.add_argument("--agent", choices=["claude", "codex"], default=os.environ.get("PQC_AGENT", "claude"))
+    ap.add_argument("--mode", choices=["agent", "llm", "template", "auto", "manual"], default="auto")
+    ap.add_argument("--agent", choices=["claude", "codex"], default=os.environ.get("PQC_AGENT", "codex"))
+    ap.add_argument("--validate-only", action="store_true", help="驗證目前 script.json，不呼叫模型")
     ap.add_argument("--revise", help="修改要求（文字）")
     a = ap.parse_args()
     d = project_dirs(a.project)
     brief = read_json(d["script"] / "brief.json")
     index = read_json(d["media"] / "media_index.json")
+    if a.validate_only:
+        script = read_json(d["script"] / "script.json")
+        errors, est = validate(script, index, brief)
+        if errors:
+            raise SystemExit("[script] " + "；".join(errors))
+        print(f"[script] 驗證通過，估計 {est:.0f} 秒")
+        return
+    if a.mode == "manual":
+        (d["script"] / "script_request.md").write_text(agent_prompt(d, brief, a.revise), encoding="utf-8")
+        print(f"[script] 待目前 Agent 寫稿：{d['script'] / 'script_request.md'}")
+        return
     order = {"auto": ["llm", "template"] if ON_COLAB else ["agent", "llm", "template"]}.get(a.mode, [a.mode])
     if a.mode == "auto" and not ON_COLAB:
         order = ["agent", "agent2", "llm", "template"]
